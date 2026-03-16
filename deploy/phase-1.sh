@@ -74,14 +74,44 @@ fi
 echo "  Adding ${WAGS_USER} to docker group..."
 usermod -aG docker "${WAGS_USER}"
 
+echo "  Setting up SSH deploy key for git push..."
+WAGS_SSH_DIR="/home/${WAGS_USER}/.ssh"
+WAGS_KEY="${WAGS_SSH_DIR}/id_ed25519"
+if [ -f "${WAGS_KEY}" ]; then
+  echo "  SSH key already exists, skipping."
+else
+  sudo -u "${WAGS_USER}" mkdir -p "${WAGS_SSH_DIR}"
+  sudo -u "${WAGS_USER}" ssh-keygen -t ed25519 -f "${WAGS_KEY}" -N "" -C "wags@vps-deploy-key"
+  sudo -u "${WAGS_USER}" ssh-keyscan -t ed25519 github.com >> "${WAGS_SSH_DIR}/known_hosts" 2>/dev/null
+  chown "${WAGS_USER}:${WAGS_USER}" "${WAGS_SSH_DIR}/known_hosts"
+  echo ""
+  echo "  *** ADD THIS DEPLOY KEY TO GITHUB (read-write): ***"
+  echo "  https://github.com/uri-may/nanoclaw/settings/keys"
+  echo ""
+  cat "${WAGS_KEY}.pub"
+  echo ""
+  echo "  Or via gh CLI from your local machine:"
+  echo "  gh repo deploy-key add - --repo uri-may/nanoclaw --title wags-vps-push --allow-write"
+  echo ""
+fi
+
 echo "  Cloning NanoClaw fork..."
+FORK_SSH="git@github.com:uri-may/nanoclaw.git"
 sudo -u "${WAGS_USER}" bash -c "
   if [ -d ${NANOCLAW_DIR} ]; then
     echo '  Repo already exists, pulling latest...'
     cd ${NANOCLAW_DIR} && git fetch origin && git reset --hard origin/main
   else
-    git clone ${FORK_URL} ${NANOCLAW_DIR}
+    git clone ${FORK_SSH} ${NANOCLAW_DIR} || git clone ${FORK_URL} ${NANOCLAW_DIR}
   fi
+"
+
+echo "  Configuring git identity..."
+sudo -u "${WAGS_USER}" bash -c "
+  cd ${NANOCLAW_DIR}
+  git config user.email 'wags@vps'
+  git config user.name 'Wags VPS'
+  git remote set-url origin ${FORK_SSH} 2>/dev/null || true
 "
 
 echo "  Installing dependencies..."
