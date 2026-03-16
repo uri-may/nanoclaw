@@ -1,7 +1,12 @@
 import { logger } from '../logger.js';
+import { registerChannel } from './registry.js';
+import { readEnvFile } from '../env.js';
+import type { Channel, NewMessage } from '../types.js';
+import type { ChannelOpts } from './registry.js';
 
 const AGENTMAIL_BASE = 'https://api.agentmail.to/v0';
 const FETCH_TIMEOUT_MS = 30_000;
+const POLL_INTERVAL_MS = 120_000;
 const SIGNATURE = "\n\n— Wags, Uri's Personal Assistant";
 
 export interface AgentMailMessage {
@@ -28,8 +33,7 @@ export async function fetchUnreadMessages(
   inboxId: string,
 ): Promise<AgentMailMessage[]> {
   const url =
-    `${AGENTMAIL_BASE}/inboxes/${inboxId}` +
-    `/messages?labels=unread`;
+    `${AGENTMAIL_BASE}/inboxes/${inboxId}` + `/messages?labels=unread`;
 
   try {
     const res = await fetch(url, {
@@ -59,9 +63,7 @@ export async function fetchMessageBody(
   inboxId: string,
   messageId: string,
 ): Promise<AgentMailMessage | null> {
-  const url =
-    `${AGENTMAIL_BASE}/inboxes/${inboxId}` +
-    `/messages/${messageId}`;
+  const url = `${AGENTMAIL_BASE}/inboxes/${inboxId}` + `/messages/${messageId}`;
 
   try {
     const res = await fetch(url, {
@@ -87,9 +89,7 @@ export async function markMessageRead(
   inboxId: string,
   messageId: string,
 ): Promise<void> {
-  const url =
-    `${AGENTMAIL_BASE}/inboxes/${inboxId}` +
-    `/messages/${messageId}`;
+  const url = `${AGENTMAIL_BASE}/inboxes/${inboxId}` + `/messages/${messageId}`;
 
   try {
     const res = await fetch(url, {
@@ -119,8 +119,7 @@ export async function replyToMessage(
   text: string,
 ): Promise<void> {
   const url =
-    `${AGENTMAIL_BASE}/inboxes/${inboxId}` +
-    `/messages/${messageId}/reply`;
+    `${AGENTMAIL_BASE}/inboxes/${inboxId}` + `/messages/${messageId}/reply`;
 
   try {
     const res = await fetch(url, {
@@ -140,3 +139,156 @@ export async function replyToMessage(
     logger.error({ err, messageId }, 'AgentMail reply error');
   }
 }
+
+// --- JID utilities ---
+// JID format: email:<thread_id>:<message_id>
+// thread_id groups conversation; message_id is used for replies
+
+function makeJid(threadId: string, messageId: string): string {
+  return `email:${threadId}:${messageId}`;
+}
+
+function parseJid(
+  jid: string,
+): { threadId: string; messageId: string } | null {
+  const parts = jid.split(':');
+  if (parts.length < 3 || parts[0] !== 'email') return null;
+  return { threadId: parts[1], messageId: parts.slice(2).join(':') };
+}
+
+// --- Channel factory ---
+
+function createEmailChannel(
+  opts: ChannelOpts,
+  apiKey: string,
+  inboxId: string,
+  ownerEmail: string,
+): Channel | null {
+  if (!apiKey) return null;
+
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let connected = false;
+
+  async function poll(): Promise<void> {
+    const messages = await fetchUnreadMessages(apiKey, inboxId);
+
+    for (const msg of messages) {
+      const sender = msg.from?.toLowerCase() ?? '';
+      if (!sender.includes(ownerEmail.toLowerCase())) {
+        logger.debug(
+          { from: msg.from, ownerEmail },
+          'Email from non-owner, dropping',
+        );
+        await markMessageRead(apiKey, inboxId, msg.message_id);
+        continue;
+      }
+
+      const detail = await fetchMessageBody(
+        apiKey,
+        inboxId,
+        msg.message_id,
+      );
+      const body = detail?.text ?? msg.preview ?? '';
+      const subject = detail?.subject ?? msg.subject ?? '';
+      const content = subject
+        ? `Subject: ${subject}\n\n${body}`
+        : body;
+
+      const jid = makeJid(msg.thread_id, msg.message_id);
+
+      opts.onChatMetadata(
+        jid,
+        msg.timestamp,
+        `Email: ${subject || msg.from}`,
+        'email',
+        false,
+      );
+
+      const newMsg: NewMessage = {
+        id: msg.message_id,
+        chat_jid: jid,
+        sender: msg.from,
+        sender_name: msg.from,
+        content,
+        timestamp: msg.timestamp,
+      };
+      opts.onMessage(jid, newMsg);
+
+      await markMessageRead(apiKey, inboxId, msg.message_id);
+    }
+  }
+
+  const channel: Channel = {
+    name: 'email',
+
+    async connect(): Promise<void> {
+      logger.info('Email channel connecting');
+      await poll();
+      pollTimer = setInterval(() => {
+        poll().catch((err) =>
+          logger.error({ err }, 'Email poll error'),
+        );
+      }, POLL_INTERVAL_MS);
+      connected = true;
+      logger.info('Email channel connected');
+    },
+
+    async sendMessage(jid: string, text: string): Promise<void> {
+      const parsed = parseJid(jid);
+      if (!parsed) {
+        logger.error({ jid }, 'Invalid email JID');
+        return;
+      }
+      await replyToMessage(
+        apiKey,
+        inboxId,
+        parsed.messageId,
+        text,
+      );
+    },
+
+    isConnected(): boolean {
+      return connected;
+    },
+
+    ownsJid(jid: string): boolean {
+      return jid.startsWith('email:');
+    },
+
+    async disconnect(): Promise<void> {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+      connected = false;
+      logger.info('Email channel disconnected');
+    },
+  };
+
+  return channel;
+}
+
+// Exposed for testing only
+export function _createEmailChannelForTesting(
+  opts: ChannelOpts,
+  apiKey: string,
+  inboxId: string,
+  ownerEmail: string,
+): Channel | null {
+  return createEmailChannel(opts, apiKey, inboxId, ownerEmail);
+}
+
+// Self-register with NanoClaw's channel registry
+registerChannel('email', (opts) => {
+  const env = readEnvFile([
+    'AGENTMAIL_API_KEY',
+    'AGENTMAIL_ADDRESS',
+    'OWNER_EMAIL',
+  ]);
+  return createEmailChannel(
+    opts,
+    env.AGENTMAIL_API_KEY ?? '',
+    env.AGENTMAIL_ADDRESS ?? '',
+    env.OWNER_EMAIL ?? '',
+  );
+});

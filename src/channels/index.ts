@@ -3,6 +3,8 @@
 
 // discord
 
+import './email.js';
+
 // gmail
 
 // slack
