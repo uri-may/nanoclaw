@@ -6,6 +6,7 @@ import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import {
+  ContainerConfig,
   NewMessage,
   RegisteredGroup,
   ScheduledTask,
@@ -596,6 +597,15 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0,
     group.isMain ? 1 : 0,
   );
+}
+
+export function updateGroupConfig(
+  jid: string,
+  config: ContainerConfig,
+): void {
+  db.prepare(
+    'UPDATE registered_groups SET container_config = ? WHERE jid = ?',
+  ).run(JSON.stringify(config), jid);
 }
 
 export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
