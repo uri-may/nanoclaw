@@ -1,8 +1,12 @@
 import { logger } from '../logger.js';
 import { registerChannel } from './registry.js';
 import { readEnvFile } from '../env.js';
+import { setRegisteredGroup } from '../db.js';
+import { resolveGroupFolderPath } from '../group-folder.js';
 import type { Channel, NewMessage } from '../types.js';
 import type { ChannelOpts } from './registry.js';
+import fs from 'fs';
+import path from 'path';
 
 const AGENTMAIL_BASE = 'https://api.agentmail.to/v0';
 const FETCH_TIMEOUT_MS = 30_000;
@@ -140,19 +144,7 @@ export async function replyToMessage(
   }
 }
 
-// --- JID utilities ---
-// JID format: email:<thread_id>:<message_id>
-// thread_id groups conversation; message_id is used for replies
-
-function makeJid(threadId: string, messageId: string): string {
-  return `email:${threadId}:${messageId}`;
-}
-
-function parseJid(jid: string): { threadId: string; messageId: string } | null {
-  const parts = jid.split(':');
-  if (parts.length < 3 || parts[0] !== 'email') return null;
-  return { threadId: parts[1], messageId: parts.slice(2).join(':') };
-}
+const EMAIL_GROUP_FOLDER = 'email_main';
 
 // --- Channel factory ---
 
@@ -164,6 +156,8 @@ function createEmailChannel(
 ): Channel | null {
   if (!apiKey || !inboxId || !ownerEmail) return null;
 
+  const jid = `email:${inboxId}`;
+  let lastMessageId: string | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let connected = false;
 
@@ -181,7 +175,9 @@ function createEmailChannel(
       for (const msg of messages) {
         const rawFrom = msg.from ?? '';
         const emailMatch = rawFrom.match(/<([^>]+)>/);
-        const sender = (emailMatch ? emailMatch[1] : rawFrom).toLowerCase().trim();
+        const sender = (emailMatch ? emailMatch[1] : rawFrom)
+          .toLowerCase()
+          .trim();
         if (sender !== ownerEmail.toLowerCase()) {
           logger.debug(
             { from: msg.from, ownerEmail },
@@ -196,7 +192,7 @@ function createEmailChannel(
         const subject = detail?.subject ?? msg.subject ?? '';
         const content = subject ? `Subject: ${subject}\n\n${body}` : body;
 
-        const jid = makeJid(msg.thread_id, msg.message_id);
+        lastMessageId = msg.message_id;
 
         opts.onChatMetadata(
           jid,
@@ -228,6 +224,22 @@ function createEmailChannel(
 
     async connect(): Promise<void> {
       logger.info('Email channel connecting');
+
+      const existing = opts.registeredGroups();
+      if (!existing[jid]) {
+        const group = {
+          name: 'Email',
+          folder: EMAIL_GROUP_FOLDER,
+          trigger: '@Wags',
+          added_at: new Date().toISOString(),
+          requiresTrigger: false,
+        };
+        setRegisteredGroup(jid, group);
+        const groupDir = resolveGroupFolderPath(group.folder);
+        fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
+        logger.info({ jid }, 'Auto-registered email group');
+      }
+
       await poll();
       pollTimer = setInterval(() => {
         poll().catch((err) => logger.error({ err }, 'Email poll error'));
@@ -236,13 +248,12 @@ function createEmailChannel(
       logger.info('Email channel connected');
     },
 
-    async sendMessage(jid: string, text: string): Promise<void> {
-      const parsed = parseJid(jid);
-      if (!parsed) {
-        logger.error({ jid }, 'Invalid email JID');
+    async sendMessage(_jid: string, text: string): Promise<void> {
+      if (!lastMessageId) {
+        logger.error({ jid }, 'No message to reply to');
         return;
       }
-      await replyToMessage(apiKey, inboxId, parsed.messageId, text);
+      await replyToMessage(apiKey, inboxId, lastMessageId, text);
     },
 
     isConnected(): boolean {

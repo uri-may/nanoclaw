@@ -155,10 +155,7 @@ export function _setRegisteredGroups(
 async function processGroupMessages(chatJid: string): Promise<boolean> {
   // Kill switch check
   if (killSwitchUsername && killSwitchGistId) {
-    const state = await checkKillSwitch(
-      killSwitchUsername,
-      killSwitchGistId,
-    );
+    const state = await checkKillSwitch(killSwitchUsername, killSwitchGistId);
     if (state === 'suspended') {
       const channel = findChannel(channels, chatJid);
       if (channel) {
@@ -496,10 +493,7 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   loadState();
 
-  const killSwitchEnv = readEnvFile([
-    'GITHUB_USERNAME',
-    'KILL_SWITCH_GIST_ID',
-  ]);
+  const killSwitchEnv = readEnvFile(['GITHUB_USERNAME', 'KILL_SWITCH_GIST_ID']);
   killSwitchUsername = killSwitchEnv.GITHUB_USERNAME || '';
   killSwitchGistId = killSwitchEnv.KILL_SWITCH_GIST_ID || '';
 
@@ -624,6 +618,10 @@ async function main(): Promise<void> {
     logger.fatal('No channels connected');
     process.exit(1);
   }
+
+  // Channels may auto-register groups during connect (e.g. email).
+  // Reload from DB so the in-memory map includes them.
+  registeredGroups = getAllRegisteredGroups();
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({

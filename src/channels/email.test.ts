@@ -6,6 +6,22 @@ import {
   markMessageRead,
   replyToMessage,
 } from './email.js';
+import type { RegisteredGroup } from '../types.js';
+
+const INBOX_ID = 'wags@agentmail.to';
+const STABLE_JID = `email:${INBOX_ID}`;
+
+function preRegistered(): Record<string, RegisteredGroup> {
+  return {
+    [STABLE_JID]: {
+      name: 'Email',
+      folder: 'email_main',
+      trigger: '@Wags',
+      added_at: '2026-01-01T00:00:00Z',
+      requiresTrigger: false,
+    },
+  };
+}
 
 describe('email channel — AgentMail API helpers', () => {
   afterEach(() => {
@@ -203,7 +219,8 @@ describe('email channel — channel adapter', () => {
     const { _createEmailChannelForTesting } = await import('./email.js');
 
     const onMessage = vi.fn();
-    const fetchMock = vi.fn()
+    const fetchMock = vi
+      .fn()
       // fetchUnreadMessages call
       .mockResolvedValueOnce({
         ok: true,
@@ -231,10 +248,10 @@ describe('email channel — channel adapter', () => {
       {
         onMessage,
         onChatMetadata: vi.fn(),
-        registeredGroups: () => ({}),
+        registeredGroups: () => preRegistered(),
       },
       'am_test',
-      'wags@agentmail.to',
+      INBOX_ID,
       'uri@example.com',
     );
 
@@ -252,11 +269,12 @@ describe('email channel — channel adapter', () => {
     await channel!.disconnect();
   });
 
-  it('poll delivers messages from owner (case-insensitive)', async () => {
+  it('poll delivers messages from owner with stable JID', async () => {
     const { _createEmailChannelForTesting } = await import('./email.js');
 
     const onMessage = vi.fn();
-    const fetchMock = vi.fn()
+    const fetchMock = vi
+      .fn()
       // fetchUnreadMessages
       .mockResolvedValueOnce({
         ok: true,
@@ -297,20 +315,20 @@ describe('email channel — channel adapter', () => {
       {
         onMessage,
         onChatMetadata: vi.fn(),
-        registeredGroups: () => ({}),
+        registeredGroups: () => preRegistered(),
       },
       'am_test',
-      'wags@agentmail.to',
+      INBOX_ID,
       'uri@example.com',
     );
 
     await channel!.connect();
 
-    // onMessage SHOULD have been called with the owner's message
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith(
-      expect.stringContaining('email:'),
+      STABLE_JID,
       expect.objectContaining({
+        chat_jid: STABLE_JID,
         sender: 'Uri@Example.COM',
         content: expect.stringContaining('Full body here'),
       }),
@@ -319,15 +337,86 @@ describe('email channel — channel adapter', () => {
     await channel!.disconnect();
   });
 
-  it('sendMessage calls replyToMessage with message ID extracted from JID', async () => {
+  it('sendMessage replies to last polled message', async () => {
     const { _createEmailChannelForTesting } = await import('./email.js');
 
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({ message_id: 'reply-1', thread_id: 'thread-1' }),
-    });
+    const fetchMock = vi
+      .fn()
+      // fetchUnreadMessages (poll sets lastMessageId)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            messages: [
+              {
+                message_id: 'msg-42',
+                thread_id: 'thread-1',
+                from: 'uri@example.com',
+                subject: 'Hey',
+                preview: 'Hi',
+                timestamp: '2026-03-13T10:00:00Z',
+                labels: ['unread'],
+              },
+            ],
+          }),
+      })
+      // fetchMessageBody
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            message_id: 'msg-42',
+            thread_id: 'thread-1',
+            from: 'uri@example.com',
+            text: 'Hi there',
+            subject: 'Hey',
+            timestamp: '2026-03-13T10:00:00Z',
+          }),
+      })
+      // markMessageRead
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) })
+      // replyToMessage (called by sendMessage)
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
     vi.stubGlobal('fetch', fetchMock);
+
+    const channel = _createEmailChannelForTesting(
+      {
+        onMessage: vi.fn(),
+        onChatMetadata: vi.fn(),
+        registeredGroups: () => preRegistered(),
+      },
+      'am_test',
+      INBOX_ID,
+      'uri@example.com',
+    );
+
+    await channel!.connect();
+    await channel!.sendMessage(STABLE_JID, 'Response text');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/messages/msg-42/reply'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    await channel!.disconnect();
+  });
+
+  it('connect auto-registers email group when not already registered', async () => {
+    const { _initTestDatabase, getRegisteredGroup } = await import(
+      '../db.js'
+    );
+    _initTestDatabase();
+
+    const { _createEmailChannelForTesting } = await import('./email.js');
+
+    // Return no unread messages from poll
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ messages: [] }),
+      }),
+    );
 
     const channel = _createEmailChannelForTesting(
       {
@@ -336,19 +425,18 @@ describe('email channel — channel adapter', () => {
         registeredGroups: () => ({}),
       },
       'am_test',
-      'wags@agentmail.to',
+      INBOX_ID,
       'uri@example.com',
     );
 
-    // JID format: email:<thread_id>:<last_message_id>
-    await channel!.sendMessage(
-      'email:thread-1:msg-1',
-      'Response text',
-    );
+    await channel!.connect();
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('/messages/msg-1/reply'),
-      expect.objectContaining({ method: 'POST' }),
-    );
+    const group = getRegisteredGroup(STABLE_JID);
+    expect(group).toBeDefined();
+    expect(group!.name).toBe('Email');
+    expect(group!.folder).toBe('email_main');
+    expect(group!.requiresTrigger).toBe(false);
+
+    await channel!.disconnect();
   });
 });
