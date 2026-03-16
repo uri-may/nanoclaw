@@ -43,10 +43,7 @@ export async function transcribeAudio(
     const text = response.text?.trim();
     if (!text) return null;
 
-    logger.info(
-      { filename, chars: text.length },
-      'Audio transcribed',
-    );
+    logger.info({ filename, chars: text.length }, 'Audio transcribed');
     return text;
   } catch (err) {
     logger.error({ err, filename }, 'Transcription failed');
