@@ -159,6 +159,9 @@ else
 # Anthropic (credential proxy handles container isolation)
 ANTHROPIC_API_KEY=sk-ant-xxx
 
+# OpenAI (host-side voice transcription — never enters containers)
+OPENAI_API_KEY=sk-xxx
+
 # AgentMail
 AGENTMAIL_API_KEY=am_xxx
 AGENTMAIL_ADDRESS=wags@agentmail.to
