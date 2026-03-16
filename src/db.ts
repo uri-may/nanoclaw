@@ -599,10 +599,7 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
   );
 }
 
-export function updateGroupConfig(
-  jid: string,
-  config: ContainerConfig,
-): void {
+export function updateGroupConfig(jid: string, config: ContainerConfig): void {
   db.prepare(
     'UPDATE registered_groups SET container_config = ? WHERE jid = ?',
   ).run(JSON.stringify(config), jid);

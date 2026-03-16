@@ -48,6 +48,7 @@ import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { checkKillSwitch } from './kill-switch.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
+import { handleModelCommand } from './model-command.js';
 import {
   restoreRemoteControl,
   startRemoteControl,
@@ -578,8 +579,32 @@ async function main(): Promise<void> {
   // Channel callbacks (shared by all channels)
   const channelOpts = {
     onMessage: (chatJid: string, msg: NewMessage) => {
-      // Remote control commands — intercept before storage
       const trimmed = msg.content.trim();
+
+      // Model command — intercept before storage
+      if (trimmed.startsWith('/model')) {
+        const group = registeredGroups[chatJid];
+        if (!group?.isMain) return;
+        const channel = findChannel(channels, chatJid);
+        if (!channel) return;
+
+        const args = trimmed.slice('/model'.length);
+        const result = handleModelCommand(args, chatJid, group);
+        if (result.updatedGroup) {
+          registeredGroups[chatJid] = result.updatedGroup;
+        }
+        channel
+          .sendMessage(chatJid, result.reply)
+          .catch((err) =>
+            logger.error(
+              { err, chatJid },
+              'Failed to send model command reply',
+            ),
+          );
+        return;
+      }
+
+      // Remote control commands — intercept before storage
       if (trimmed === '/remote-control' || trimmed === '/remote-control-end') {
         handleRemoteControl(trimmed, chatJid, msg).catch((err) =>
           logger.error({ err, chatJid }, 'Remote control command error'),
