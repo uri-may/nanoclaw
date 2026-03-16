@@ -437,6 +437,25 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
+          // Kill switch check — blocks both piped and new-container paths
+          if (killSwitchUsername && killSwitchGistId) {
+            const state = await checkKillSwitch(
+              killSwitchUsername,
+              killSwitchGistId,
+            );
+            if (state === 'suspended') {
+              await channel.sendMessage(chatJid, 'Agent suspended.');
+              logger.info(
+                { chatJid },
+                'Kill switch active, skipping messages',
+              );
+              lastAgentTimestamp[chatJid] =
+                messagesToSend[messagesToSend.length - 1].timestamp;
+              saveState();
+              continue;
+            }
+          }
+
           if (queue.sendMessage(chatJid, formatted)) {
             logger.debug(
               { chatJid, count: messagesToSend.length },
