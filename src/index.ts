@@ -445,10 +445,7 @@ async function startMessageLoop(): Promise<void> {
             );
             if (state === 'suspended') {
               await channel.sendMessage(chatJid, 'Agent suspended.');
-              logger.info(
-                { chatJid },
-                'Kill switch active, skipping messages',
-              );
+              logger.info({ chatJid }, 'Kill switch active, skipping messages');
               lastAgentTimestamp[chatJid] =
                 messagesToSend[messagesToSend.length - 1].timestamp;
               saveState();

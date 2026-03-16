@@ -402,9 +402,7 @@ describe('email channel — channel adapter', () => {
   });
 
   it('connect auto-registers email group when not already registered', async () => {
-    const { _initTestDatabase, getRegisteredGroup } = await import(
-      '../db.js'
-    );
+    const { _initTestDatabase, getRegisteredGroup } = await import('../db.js');
     _initTestDatabase();
 
     const { _createEmailChannelForTesting } = await import('./email.js');
