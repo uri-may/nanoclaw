@@ -21,6 +21,7 @@ import {
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
+import { readEnvFile } from './env.js';
 import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
@@ -45,6 +46,7 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
+import { checkKillSwitch } from './kill-switch.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
   restoreRemoteControl,
@@ -69,6 +71,8 @@ let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
+let killSwitchUsername = '';
+let killSwitchGistId = '';
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -149,6 +153,22 @@ export function _setRegisteredGroups(
  * Called by the GroupQueue when it's this group's turn.
  */
 async function processGroupMessages(chatJid: string): Promise<boolean> {
+  // Kill switch check
+  if (killSwitchUsername && killSwitchGistId) {
+    const state = await checkKillSwitch(
+      killSwitchUsername,
+      killSwitchGistId,
+    );
+    if (state === 'suspended') {
+      const channel = findChannel(channels, chatJid);
+      if (channel) {
+        await channel.sendMessage(chatJid, 'Agent suspended.');
+      }
+      logger.info({ chatJid }, 'Kill switch active, skipping messages');
+      return true;
+    }
+  }
+
   const group = registeredGroups[chatJid];
   if (!group) return true;
 
@@ -475,6 +495,14 @@ async function main(): Promise<void> {
   initDatabase();
   logger.info('Database initialized');
   loadState();
+
+  const killSwitchEnv = readEnvFile([
+    'GITHUB_USERNAME',
+    'KILL_SWITCH_GIST_ID',
+  ]);
+  killSwitchUsername = killSwitchEnv.GITHUB_USERNAME || '';
+  killSwitchGistId = killSwitchEnv.KILL_SWITCH_GIST_ID || '';
+
   restoreRemoteControl();
 
   // Start credential proxy (containers route API calls through this)
