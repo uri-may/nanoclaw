@@ -148,9 +148,7 @@ function makeJid(threadId: string, messageId: string): string {
   return `email:${threadId}:${messageId}`;
 }
 
-function parseJid(
-  jid: string,
-): { threadId: string; messageId: string } | null {
+function parseJid(jid: string): { threadId: string; messageId: string } | null {
   const parts = jid.split(':');
   if (parts.length < 3 || parts[0] !== 'email') return null;
   return { threadId: parts[1], messageId: parts.slice(2).join(':') };
@@ -164,57 +162,64 @@ function createEmailChannel(
   inboxId: string,
   ownerEmail: string,
 ): Channel | null {
-  if (!apiKey) return null;
+  if (!apiKey || !inboxId || !ownerEmail) return null;
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let connected = false;
 
+  let polling = false;
+
   async function poll(): Promise<void> {
-    const messages = await fetchUnreadMessages(apiKey, inboxId);
+    if (polling) {
+      logger.debug('Poll already in progress, skipping');
+      return;
+    }
+    polling = true;
+    try {
+      const messages = await fetchUnreadMessages(apiKey, inboxId);
 
-    for (const msg of messages) {
-      const sender = msg.from?.toLowerCase() ?? '';
-      if (!sender.includes(ownerEmail.toLowerCase())) {
-        logger.debug(
-          { from: msg.from, ownerEmail },
-          'Email from non-owner, dropping',
+      for (const msg of messages) {
+        const rawFrom = msg.from ?? '';
+        const emailMatch = rawFrom.match(/<([^>]+)>/);
+        const sender = (emailMatch ? emailMatch[1] : rawFrom).toLowerCase().trim();
+        if (sender !== ownerEmail.toLowerCase()) {
+          logger.debug(
+            { from: msg.from, ownerEmail },
+            'Email from non-owner, dropping',
+          );
+          await markMessageRead(apiKey, inboxId, msg.message_id);
+          continue;
+        }
+
+        const detail = await fetchMessageBody(apiKey, inboxId, msg.message_id);
+        const body = detail?.text ?? msg.preview ?? '';
+        const subject = detail?.subject ?? msg.subject ?? '';
+        const content = subject ? `Subject: ${subject}\n\n${body}` : body;
+
+        const jid = makeJid(msg.thread_id, msg.message_id);
+
+        opts.onChatMetadata(
+          jid,
+          msg.timestamp,
+          `Email: ${subject || msg.from}`,
+          'email',
+          false,
         );
+
+        const newMsg: NewMessage = {
+          id: msg.message_id,
+          chat_jid: jid,
+          sender: msg.from,
+          sender_name: msg.from,
+          content,
+          timestamp: msg.timestamp,
+        };
+        opts.onMessage(jid, newMsg);
+
         await markMessageRead(apiKey, inboxId, msg.message_id);
-        continue;
       }
-
-      const detail = await fetchMessageBody(
-        apiKey,
-        inboxId,
-        msg.message_id,
-      );
-      const body = detail?.text ?? msg.preview ?? '';
-      const subject = detail?.subject ?? msg.subject ?? '';
-      const content = subject
-        ? `Subject: ${subject}\n\n${body}`
-        : body;
-
-      const jid = makeJid(msg.thread_id, msg.message_id);
-
-      opts.onChatMetadata(
-        jid,
-        msg.timestamp,
-        `Email: ${subject || msg.from}`,
-        'email',
-        false,
-      );
-
-      const newMsg: NewMessage = {
-        id: msg.message_id,
-        chat_jid: jid,
-        sender: msg.from,
-        sender_name: msg.from,
-        content,
-        timestamp: msg.timestamp,
-      };
-      opts.onMessage(jid, newMsg);
-
-      await markMessageRead(apiKey, inboxId, msg.message_id);
+    } finally {
+      polling = false;
     }
   }
 
@@ -225,9 +230,7 @@ function createEmailChannel(
       logger.info('Email channel connecting');
       await poll();
       pollTimer = setInterval(() => {
-        poll().catch((err) =>
-          logger.error({ err }, 'Email poll error'),
-        );
+        poll().catch((err) => logger.error({ err }, 'Email poll error'));
       }, POLL_INTERVAL_MS);
       connected = true;
       logger.info('Email channel connected');
@@ -239,12 +242,7 @@ function createEmailChannel(
         logger.error({ jid }, 'Invalid email JID');
         return;
       }
-      await replyToMessage(
-        apiKey,
-        inboxId,
-        parsed.messageId,
-        text,
-      );
+      await replyToMessage(apiKey, inboxId, parsed.messageId, text);
     },
 
     isConnected(): boolean {
