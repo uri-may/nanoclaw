@@ -34,8 +34,8 @@ ufw allow ssh comment "SSH (key-only)"
 ufw allow in on tailscale0 comment "Tailscale"
 # Docker bridge: containers need to reach credential proxy on host
 ufw allow in on docker0 to any port 3001 comment "NanoClaw credential proxy"
-# Browser sidecar: containers need CDP access on host
-ufw allow in on docker0 to any port 9222 comment "Browser sidecar CDP"
+# Browser sidecar: containers need CDP access on host (9223 via socat relay)
+ufw allow in on docker0 to any port 9223 comment "Browser sidecar CDP"
 # TailSocks: browser sidecar routes .co.il traffic through SOCKS proxy
 ufw allow in on docker0 to any port 1080 comment "TailSocks SOCKS5 proxy"
 ufw --force enable
@@ -191,7 +191,7 @@ KILL_SWITCH_GIST_ID=xxx
 OP_SERVICE_ACCOUNT_TOKEN=ops_xxx
 
 # Browser sidecar CDP endpoint (containers connect via host gateway)
-BROWSER_CDP_URL=http://host.docker.internal:9222
+BROWSER_CDP_URL=http://host.docker.internal:9223
 
 # NanoClaw config
 ASSISTANT_NAME=Wags
