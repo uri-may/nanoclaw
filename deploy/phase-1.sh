@@ -34,12 +34,23 @@ ufw allow ssh comment "SSH (key-only)"
 ufw allow in on tailscale0 comment "Tailscale"
 # Docker bridge: containers need to reach credential proxy on host
 ufw allow in on docker0 to any port 3001 comment "NanoClaw credential proxy"
+# Browser sidecar: containers need CDP access on host
+ufw allow in on docker0 to any port 9222 comment "Browser sidecar CDP"
+# TailSocks: browser sidecar routes .co.il traffic through SOCKS proxy
+ufw allow in on docker0 to any port 1080 comment "TailSocks SOCKS5 proxy"
 ufw --force enable
 
 echo "  Installing fail2ban..."
 apt-get install -y -qq fail2ban
 systemctl enable fail2ban
 systemctl start fail2ban
+
+echo "  Installing 1Password CLI..."
+curl -sS https://downloads.1password.com/linux/keys/1password.asc | \
+  gpg --dearmor --output /usr/share/keyrings/1password-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/$(dpkg --print-architecture) stable main" | \
+  tee /etc/apt/sources.list.d/1password-cli.list
+apt-get update && apt-get install -y 1password-cli
 
 echo "  Enabling auto security updates..."
 apt-get install -y -qq unattended-upgrades
@@ -175,6 +186,12 @@ OWNER_EMAIL=uri@example.com
 # Kill switch
 GITHUB_USERNAME=uri-may
 KILL_SWITCH_GIST_ID=xxx
+
+# 1Password Service Account (host-only — never enters containers)
+OP_SERVICE_ACCOUNT_TOKEN=ops_xxx
+
+# Browser sidecar CDP endpoint (containers connect via host gateway)
+BROWSER_CDP_URL=http://host.docker.internal:9222
 
 # NanoClaw config
 ASSISTANT_NAME=Wags

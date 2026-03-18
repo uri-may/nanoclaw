@@ -333,6 +333,87 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+// --- Credential fill (IPC-based, host executes 1Password + Puppeteer) ---
+
+const CRED_RESULTS_DIR = path.join(IPC_DIR, 'cred_results');
+
+async function waitForCredResult(
+  requestId: string,
+  maxWait = 30000,
+): Promise<{ success: boolean; message: string }> {
+  const resultFile = path.join(CRED_RESULTS_DIR, `${requestId}.json`);
+  const pollInterval = 500;
+  let elapsed = 0;
+  while (elapsed < maxWait) {
+    if (fs.existsSync(resultFile)) {
+      try {
+        const result = JSON.parse(fs.readFileSync(resultFile, 'utf-8'));
+        fs.unlinkSync(resultFile);
+        return result;
+      } catch {
+        return { success: false, message: 'Failed to read result' };
+      }
+    }
+    await new Promise((r) => setTimeout(r, pollInterval));
+    elapsed += pollInterval;
+  }
+  return { success: false, message: 'Credential fill timed out' };
+}
+
+server.tool(
+  'fill_credentials',
+  `Fill login or payment form fields with credentials from 1Password. Main group only.
+
+You NEVER see the actual credential values — the host fetches them from 1Password and fills the form fields directly in the browser. Use this after navigating to a login page.
+
+IMPORTANT: First navigate to the page and identify the form field CSS selectors using chrome-devtools tools. Then call this tool with the 1Password item reference and field mappings.
+
+Example for a login form:
+  item_ref: "op://Personal/BankOfIsrael"
+  fields: [
+    { "selector": "#username", "field": "username" },
+    { "selector": "#password", "field": "password" }
+  ]`,
+  {
+    item_ref: z.string().describe(
+      '1Password item reference (e.g., "op://Vault/ItemName")',
+    ),
+    fields: z.array(z.object({
+      selector: z.string().describe('CSS selector for the form field'),
+      field: z.string().describe(
+        '1Password field name (e.g., "username", "password", "credit card number")',
+      ),
+    })).describe('Mapping of CSS selectors to 1Password fields'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: 'Only the main group can fill credentials.',
+        }],
+        isError: true,
+      };
+    }
+
+    const requestId = `cred-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, {
+      type: 'fill_credentials',
+      requestId,
+      itemRef: args.item_ref,
+      fields: args.fields,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = await waitForCredResult(requestId);
+    return {
+      content: [{ type: 'text' as const, text: result.message }],
+      isError: !result.success,
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

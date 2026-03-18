@@ -81,6 +81,22 @@ Real API credentials **never enter containers**. Instead, the host runs an HTTP 
 - Any credentials matching blocked patterns
 - `.env` is shadowed with `/dev/null` in the project root mount
 
+### 6. Browser Automation Security
+
+**Browser Sidecar** — A persistent Chrome instance runs as a separate Docker container (`kasmweb/chrome`). It exposes CDP only on `127.0.0.1:9222` (localhost + Docker bridge).
+
+**Credential Injection** — Agent containers can navigate and interact with the browser via Chrome DevTools MCP, but credential filling uses IPC:
+1. Agent calls `fill_credentials` with a 1Password item reference and CSS selectors
+2. Host fetches credential values from 1Password CLI (`op read`)
+3. Host connects to browser via Puppeteer and fills form fields
+4. Agent receives only "Filled N field(s)" confirmation
+
+**OP_SERVICE_ACCOUNT_TOKEN** stays on the host (in `.env`), never passed to containers. The 1Password Service Account is scoped read-only to a single vault.
+
+**Accepted Gaps:**
+- Agent can read back filled form values via CDP `page.evaluate()` — this is inherent to the shared browser model. Mitigated by using the main group only (self-trust).
+- noVNC is accessible on Tailscale interface only (not public internet).
+
 ## Privilege Comparison
 
 | Capability | Main Group | Non-Main Group |

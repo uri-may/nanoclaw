@@ -239,6 +239,11 @@ function buildContainerArgs(
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
 
+  // Browser sidecar: pass CDP URL if available
+  if (process.env.BROWSER_CDP_URL) {
+    args.push('-e', `BROWSER_CDP_URL=${process.env.BROWSER_CDP_URL}`);
+  }
+
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
 

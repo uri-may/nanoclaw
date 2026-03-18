@@ -26,6 +26,12 @@ sudo -u "${WAGS_USER}" bash -c "cd ${NANOCLAW_DIR} && npm test" || {
   exit 1
 }
 
+# Restart browser sidecar if running
+if docker ps -q -f name=nanoclaw-browser | grep -q .; then
+  echo "=== Restarting browser sidecar ==="
+  sudo -iu "${WAGS_USER}" bash ~/nanoclaw/deploy/browser-sidecar.sh
+fi
+
 echo "=== Restarting NanoClaw ==="
 XDG_RUNTIME_DIR="/run/user/${WAGS_UID}" \
 DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${WAGS_UID}/bus" \

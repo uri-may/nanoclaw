@@ -5,6 +5,7 @@ import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
+import { handleCredentialFill } from './credential-fill.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
@@ -124,6 +125,17 @@ export function startIpcWatcher(deps: IpcDeps): void {
             const filePath = path.join(tasksDir, file);
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              // Credential fill handled separately via IPC (host-only secrets)
+              const handled = await handleCredentialFill(
+                data,
+                sourceGroup,
+                isMain,
+                DATA_DIR,
+              );
+              if (handled) {
+                fs.unlinkSync(filePath);
+                continue;
+              }
               // Pass source group identity to processTaskIpc for authorization
               await processTaskIpc(data, sourceGroup, isMain, deps);
               fs.unlinkSync(filePath);
