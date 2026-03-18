@@ -26,7 +26,7 @@ docker run -d \
   -p 127.0.0.1:${CDP_PORT}:9222 \
   -p 127.0.0.1:${VNC_PORT}:6901 \
   -v "$BROWSER_DATA:/home/kasm-user/data" \
-  -e KASM_CHROME_ARGS="--remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --proxy-pac-url=file:///home/kasm-user/data/proxy.pac" \
+  -e APP_ARGS="--start-maximized --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --proxy-pac-url=file:///home/kasm-user/data/proxy.pac" \
   "$IMAGE"
 
 echo "Browser sidecar started:"
